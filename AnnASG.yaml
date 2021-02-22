@@ -1,0 +1,98 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+    MySubnets:
+        Type: String
+        Description: The subnets where to launch the service
+        Default: "subnet-c05b119a,subnet-25f8f143,subnet-91051dd9"
+    NameOnPage:
+        Type: String
+        Description: The name to place on the web page
+        Default: "Ann-Charlotte"
+Resources:
+  AnnsLaunchTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
+    Description: A template for the webserver EC2s that displays a welcome page with a specified name on, the date and time of creation and a random number 1-10
+    Properties:
+      LaunchTemplateName: !Sub '${AWS::StackName}-launch-template-for-auto-scaling'
+      LaunchTemplateData:
+        ImageId: 'ami-0fc970315c2d38f01'
+        InstanceType: t2.micro
+        UserData: !Base64 |
+          #!/bin/bash -x
+          yum update -y
+          amazon-linux-extras install nginx1 -y
+          systemctl start nginx
+          systemctl enable nginx
+          sed -i -e "s/Administrator/Ann-Charlotte $(date)/"        /usr/share/nginx/html/index.html
+          sed -i -e "s/UTC 2021/--  $(( ( RANDOM % 10 )  + 1 ))/"   /usr/share/nginx/html/index.html
+        KeyName: MyBestKey
+        SecurityGroupIds: 
+          - !Ref AnnsSecGrp
+        Monitoring: 
+          Enabled: true
+
+  AnnsSecGrp:
+    Type: 'AWS::EC2::SecurityGroup'
+    Description: A security group suitable for webservers
+    Properties:
+      GroupDescription: Enable SSH access from Anns Cloud9 via port 22
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 172.31.16.22/32
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: "Name"
+          Value: "WebSecGrp"
+      VpcId: vpc-b39a45ca
+
+  AnnsASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Description: An ASG that launches the webservers with 'AnnsLaunchTemplate'and connects to 'AnnsTargetGroup'
+    Properties:
+      AutoScalingGroupName: AnnsASG
+      MinSize: "1"
+      MaxSize: "3"
+      DesiredCapacity: "2"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AnnsLaunchTemplate
+        Version: !GetAtt AnnsLaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier:
+        - !Ref MySubnets
+#      AvailabilityZones:
+#        - subnet-c05b119a
+#        - subnet-25f8f143
+#        - subnet-91051dd9
+#        - !Ref MySubnets
+      TargetGroupARNs:
+        - !Ref AnnsTargetGroup
+
+  AnnsTargetGroup:
+        Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+        Description: A target group in this VPC for the autoscaled webservers 'AnnsWeb'
+        Properties:
+            Port: 80
+            Protocol: "HTTP"
+            HealthCheckPort: "traffic-port"
+            HealthCheckProtocol: "HTTP"
+            TargetType: "instance"
+            Matcher: 
+                HttpCode: "200"
+            VpcId: vpc-b39a45ca
+            Name: "AnnsTG"
+
+Outputs:        
+    ASG:
+        Description: The created AutoScalingGroup
+        Value: !Ref AnnsASG
+    TG:
+        Description: The created TargetGroup
+        Value: !Ref AnnsTargetGroup
+    SG:
+        Description: The created SecurityGroup
+        Value: !Ref AnnsSecGrp
